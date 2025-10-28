@@ -10,7 +10,7 @@ interface Props {
     title: string
     authorId?: number
     publishedYear: number
-    // UI-only (not sent to backend, but useful for cards)
+    // UI-only
     isbn?: string
     coverUrl?: string
     description?: string
@@ -18,8 +18,17 @@ interface Props {
   onCancel: () => void
 }
 
+type FormState = {
+  title: string
+  authorId: number
+  publishedYear: number
+  isbn: string
+  coverUrl: string
+  description: string
+}
+
 export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<FormState>({
     title: "",
     authorId: 0,
     publishedYear: new Date().getFullYear(),
@@ -27,7 +36,7 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
     coverUrl: "",
     description: "",
   })
-  const [errors, setErrors] = useState<Partial<Record<keyof typeof formData, string>>>({})
+  const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({})
   const [results, setResults] = useState<GoogleBook[]>([])
   const [isSearching, setIsSearching] = useState(false)
 
@@ -46,17 +55,18 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
         name === "authorId" || name === "publishedYear" ? parseInt(value || "0", 10) : value,
     }))
 
-    if (errors[name as keyof typeof errors]) {
+    // clear field error when user edits
+    if (errors[name as keyof FormState]) {
       setErrors((prev) => ({ ...prev, [name]: "" }))
     }
 
-    // live Google search when typing the title (3+ chars)
+    // live Google search
     if (name === "title") {
       const q = value.trim()
       if (q.length > 2) {
         setIsSearching(true)
         searchBooksByTitle(q)
-          .then((books) => setResults(books))
+          .then(setResults)
           .catch(() => setResults([]))
           .finally(() => setIsSearching(false))
       } else {
@@ -65,23 +75,42 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
     }
   }
 
+  // when user picks a Google result, prefill + check author against backend
   const handlePick = (b: GoogleBook) => {
+    // 1) Prefill fields from Google result
+    const pickedYear = b.publishedDate
+      ? parseInt(String(b.publishedDate).slice(0, 4), 10)
+      : NaN
+
+    // 2) Try to match author by name
+    const pickedAuthorName = (b.author || "").trim().toLowerCase()
+    const matched = authors.find(
+      (a) => a.name.trim().toLowerCase() === pickedAuthorName && a.id > 0
+    )
+
     setFormData((prev) => ({
       ...prev,
       title: b.title || prev.title,
-      // publishedDate can be "2007" or "2007-01-01" — extract the year safely
-      publishedYear: b.publishedDate
-        ? parseInt(String(b.publishedDate).slice(0, 4), 10) || prev.publishedYear
-        : prev.publishedYear,
+      publishedYear: !isNaN(pickedYear) ? pickedYear : prev.publishedYear,
       isbn: b.isbn || prev.isbn,
       coverUrl: b.thumbnail || prev.coverUrl,
+      authorId: matched ? matched.id : 0, // select match or Unknown
     }))
+
+    // 3) Set/clear authorId error depending on match
+    setErrors((prev) => ({
+      ...prev,
+      authorId: matched ? "" : "No matching author found. Please select manually.",
+    }))
+
+    // 4) Hide suggestions
+    setResults([])
   }
 
   const clearResults = () => setResults([])
 
   const validate = () => {
-    const next: typeof errors = {}
+    const next: Partial<Record<keyof FormState, string>> = {}
     if (!formData.title.trim()) next.title = "Title is required"
     if (!formData.publishedYear || isNaN(formData.publishedYear))
       next.publishedYear = "Year is required"
@@ -97,13 +126,13 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
       title: formData.title.trim(),
       authorId: formData.authorId || undefined,
       publishedYear: formData.publishedYear,
-      // UI-only fields (kept for cards/preview; backend ignores them)
+      // UI-only fields
       isbn: formData.isbn || undefined,
       coverUrl: formData.coverUrl || undefined,
       description: formData.description || undefined,
     })
 
-    // optional: reset after submit
+    // optional reset
     setFormData({
       title: "",
       authorId: 0,
@@ -119,7 +148,7 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
     <form onSubmit={submit} className="bg-white border rounded-xl p-6">
       <h2 className="text-lg font-semibold mb-4">Add New Book</h2>
 
-      {/* Title + suggestions */}
+      {/* Title + Google suggestions */}
       <div className="mb-4">
         <label htmlFor="title" className="block text-sm font-medium text-gray-700">
           Title *
@@ -137,7 +166,6 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
           autoComplete="off"
         />
 
-        {/* Suggestions list (below the input). Keeps your layout/CSS. */}
         <BookSearchResults
           results={results}
           isSearching={isSearching}
@@ -146,7 +174,7 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
         />
       </div>
 
-      {/* Author */}
+      {/* Author (preselected if matched) */}
       <div className="mb-4">
         <label htmlFor="authorId" className="block text-sm font-medium text-gray-700">
           Author
@@ -156,7 +184,9 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
           name="authorId"
           value={formData.authorId}
           onChange={handleChange}
-          className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring border-gray-300"
+          className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring ${
+            errors.authorId ? "border-red-500" : "border-gray-300"
+          }`}
         >
           {authorOptions.map((a) => (
             <option key={a.id} value={a.id}>
@@ -164,6 +194,7 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
             </option>
           ))}
         </select>
+        {errors.authorId && <p className="text-xs mt-1 text-red-600">{errors.authorId}</p>}
       </div>
 
       {/* Year */}
@@ -181,6 +212,9 @@ export default function AddBookForm({ authors, onSubmit, onCancel }: Props) {
             errors.publishedYear ? "border-red-500" : "border-gray-300"
           }`}
         />
+        {errors.publishedYear && (
+          <p className="text-xs mt-1 text-red-600">{errors.publishedYear}</p>
+        )}
       </div>
 
       {/* Optional UI-only fields */}
